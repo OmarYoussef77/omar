@@ -9,15 +9,14 @@ This audit finds existing tags so the agent can pick one source per platform.
 from __future__ import annotations
 
 import re
+import urllib.error
 import urllib.request
 from typing import Any
 
 from .config import enabled_platforms
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"
-)
+# Identify honestly as a script rather than impersonating a browser.
+USER_AGENT = "tracking-agent/0.1 (+https://github.com/OmarYoussef77/omar; storefront tracking audit)"
 
 # platform -> list of (description, regex with one capture group for the ID)
 DETECTORS: dict[str, list[tuple[str, str]]] = {
@@ -52,9 +51,18 @@ SHOPIFY_MARKERS = {
 def fetch(url: str, timeout: float = 20.0) -> str:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403, 429, 503):
+            raise RuntimeError(
+                f"{url} returned HTTP {exc.code}: the store's bot protection or password page "
+                "blocked the audit. Disable the storefront password temporarily, or check the "
+                "installed tags by hand (theme.liquid, Settings > Customer events, sales channel apps)."
+            ) from exc
+        raise
 
 
 def detect(html: str) -> dict[str, Any]:

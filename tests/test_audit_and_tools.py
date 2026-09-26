@@ -1,5 +1,9 @@
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+
+import pytest
 
 from tracking_agent import audit
 from tracking_agent.tools import Session, generate_files, make_tools
@@ -30,6 +34,45 @@ def test_compare_warns_about_duplicates(config):
     assert "GTM-OLD9999" in warnings  # a second container
     assert "meta: 1234567890123456 is already firing" in warnings  # native app double-count
     assert "ga4: a different ID" in warnings
+
+
+def _serve(status, body=b"<html>GTM-ABC1234</html>"):
+    seen = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen["user_agent"] = self.headers.get("User-Agent")
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, seen
+
+
+def test_audit_identifies_itself_honestly():
+    server, seen = _serve(200)
+    try:
+        result = audit.audit_url(f"http://127.0.0.1:{server.server_port}/")
+    finally:
+        server.shutdown()
+    assert seen["user_agent"].startswith("tracking-agent/")
+    assert "Mozilla" not in seen["user_agent"]
+    assert result["installed"]["gtm"][0]["id"] == "GTM-ABC1234"
+
+
+def test_audit_explains_blocked_storefront():
+    server, _ = _serve(403, b"blocked")
+    try:
+        with pytest.raises(RuntimeError, match="bot protection or password page"):
+            audit.audit_url(f"http://127.0.0.1:{server.server_port}/")
+    finally:
+        server.shutdown()
 
 
 def _session(tmp_path, config, approve=lambda _s: True):

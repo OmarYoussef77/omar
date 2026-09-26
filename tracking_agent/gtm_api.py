@@ -12,6 +12,7 @@ Application Default Credentials (`gcloud auth application-default login
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 SCOPES = [
@@ -40,6 +41,13 @@ def plan_push(export: dict[str, Any], existing: dict[str, list[dict[str, Any]]])
 
 
 class GTMClient:
+    # The Tag Manager API has low per-user rate limits. Space out writes, and
+    # let googleapiclient retry 429 / 5xx / rate-limit 403s with randomized
+    # exponential backoff instead of failing a push halfway through.
+    min_write_interval = 1.0  # seconds between write calls
+    num_retries = 6
+    _last_write = 0.0
+
     def __init__(self, account_id: str, container_id: str, credentials_file: str = ""):
         try:
             import google.auth
@@ -57,27 +65,41 @@ class GTMClient:
         self.service = build("tagmanager", "v2", credentials=creds, cache_discovery=False)
         self.container_path = f"accounts/{account_id}/containers/{container_id}"
 
+    def _execute(self, request, *, write: bool = False) -> dict[str, Any]:
+        if write:
+            wait = self._last_write + self.min_write_interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+        try:
+            return request.execute(num_retries=self.num_retries)
+        finally:
+            if write:
+                self._last_write = time.monotonic()
+
     # -- workspaces ----------------------------------------------------------
     def _workspaces(self):
         return self.service.accounts().containers().workspaces()
 
     def get_or_create_workspace(self, name: str) -> str:
-        listing = self._workspaces().list(parent=self.container_path).execute()
+        listing = self._execute(self._workspaces().list(parent=self.container_path))
         for ws in listing.get("workspace", []):
             if ws["name"] == name:
                 return ws["path"]
-        created = self._workspaces().create(
-            parent=self.container_path,
-            body={"name": name, "description": "Created by tracking-agent"},
-        ).execute()
+        created = self._execute(
+            self._workspaces().create(
+                parent=self.container_path,
+                body={"name": name, "description": "Created by tracking-agent"},
+            ),
+            write=True,
+        )
         return created["path"]
 
     def list_entities(self, workspace_path: str) -> dict[str, list[dict[str, Any]]]:
         ws = self._workspaces()
         return {
-            "variable": ws.variables().list(parent=workspace_path).execute().get("variable", []),
-            "trigger": ws.triggers().list(parent=workspace_path).execute().get("trigger", []),
-            "tag": ws.tags().list(parent=workspace_path).execute().get("tag", []),
+            "variable": self._execute(ws.variables().list(parent=workspace_path)).get("variable", []),
+            "trigger": self._execute(ws.triggers().list(parent=workspace_path)).get("trigger", []),
+            "tag": self._execute(ws.tags().list(parent=workspace_path)).get("tag", []),
         }
 
     # -- push ----------------------------------------------------------------
@@ -93,10 +115,10 @@ class GTMClient:
             body = _clean(entity, id_field)
             current = by_name[kind].get(entity["name"])
             if current:
-                saved = resource.update(path=current["path"], body=body).execute()
+                saved = self._execute(resource.update(path=current["path"], body=body), write=True)
                 results["updated"].append(f"{kind}: {entity['name']}")
             else:
-                saved = resource.create(parent=workspace_path, body=body).execute()
+                saved = self._execute(resource.create(parent=workspace_path, body=body), write=True)
                 results["created"].append(f"{kind}: {entity['name']}")
             return saved
 
@@ -119,16 +141,19 @@ class GTMClient:
         return results
 
     def create_version(self, workspace_path: str, name: str, notes: str = "") -> dict[str, Any]:
-        response = self._workspaces().create_version(
-            path=workspace_path, body={"name": name, "notes": notes}
-        ).execute()
+        response = self._execute(
+            self._workspaces().create_version(path=workspace_path, body={"name": name, "notes": notes}),
+            write=True,
+        )
         if response.get("compilerError"):
             raise RuntimeError(f"GTM reported a compiler error: {response}")
         version = response["containerVersion"]
         return {"path": version["path"], "containerVersionId": version["containerVersionId"]}
 
     def publish_version(self, version_path: str) -> dict[str, Any]:
-        response = self.service.accounts().containers().versions().publish(path=version_path).execute()
+        response = self._execute(
+            self.service.accounts().containers().versions().publish(path=version_path), write=True
+        )
         if response.get("compilerError"):
             raise RuntimeError(f"GTM reported a compiler error: {response}")
         return {"published": response["containerVersion"]["containerVersionId"]}

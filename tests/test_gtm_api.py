@@ -2,15 +2,21 @@
 
 import itertools
 
+from tracking_agent import gtm_api
+
 from tracking_agent import gtm_builder
 from tracking_agent.gtm_api import GTMClient
+
+
+RETRY_SETTINGS = []
 
 
 class _Call:
     def __init__(self, result):
         self.result = result
 
-    def execute(self):
+    def execute(self, num_retries=0):
+        RETRY_SETTINGS.append(num_retries)
         return self.result
 
 
@@ -54,6 +60,7 @@ def _client(workspaces):
     client = GTMClient.__new__(GTMClient)
     client.container_path = "accounts/1/containers/2"
     client._workspaces = lambda: workspaces
+    client.min_write_interval = 0
     return client
 
 
@@ -79,3 +86,32 @@ def test_push_remaps_trigger_ids_and_upserts(config):
     second = client.push_to_workspace(export, ws)
     assert second["created"] == []
     assert len(second["updated"]) == len(first["created"])
+
+
+def test_every_call_retries_with_backoff(config):
+    RETRY_SETTINGS.clear()
+    _client(_Workspaces()).push_to_workspace(gtm_builder.build_container(config), "ws")
+    assert RETRY_SETTINGS and set(RETRY_SETTINGS) == {GTMClient.num_retries}
+    assert GTMClient.num_retries >= 5
+
+
+def test_writes_are_spaced_out(config, monkeypatch):
+    clock = {"now": 100.0}
+    sleeps = []
+    monkeypatch.setattr(gtm_api.time, "monotonic", lambda: clock["now"])
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(gtm_api.time, "sleep", fake_sleep)
+    client = _client(_Workspaces())
+    client.min_write_interval = 1.0
+    export = gtm_builder.build_container(config)
+    client.push_to_workspace(export, "ws")
+
+    cv = export["containerVersion"]
+    writes = len(cv["variable"]) + len(cv["trigger"]) + len(cv["tag"])
+    # Instant fake calls: every write after the first waits the full interval.
+    assert len(sleeps) == writes - 1
+    assert all(abs(s - 1.0) < 1e-9 for s in sleeps)

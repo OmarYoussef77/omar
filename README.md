@@ -84,6 +84,8 @@ Options: `--config tracking.yaml` and `--out build`. To use a different model, s
 2. In GTM > Admin > User Management, add the service account's email with **Publish** permission.
 3. In `tracking.yaml`, set `gtm.account_id` and `gtm.container_id` (the numbers in the GTM URL: `.../accounts/<account_id>/containers/<container_id>/`) and `gtm.credentials_file`.
 
+Pushes are paced (one write per second) and retried with exponential backoff on rate limits and server errors, so a large container won't fail halfway. A full push of ~70 entities takes a little over a minute.
+
 If you skip this, import `build/gtm-container.json` yourself: GTM > Admin > Import Container > New workspace > **Merge**.
 
 ## Things to know
