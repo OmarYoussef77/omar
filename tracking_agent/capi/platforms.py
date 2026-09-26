@@ -42,6 +42,8 @@ SECRET_ENV = {
     "google_ads_client_id": "GOOGLE_ADS_CLIENT_ID",
     "google_ads_client_secret": "GOOGLE_ADS_CLIENT_SECRET",
     "google_ads_refresh_token": "GOOGLE_ADS_REFRESH_TOKEN",
+    "health_report_token": "HEALTH_REPORT_TOKEN",
+    "health_alert_webhook_url": "HEALTH_ALERT_WEBHOOK_URL",
 }
 
 

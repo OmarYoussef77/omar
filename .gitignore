@@ -8,3 +8,4 @@ tracking.yaml
 .env
 *.egg-info/
 capi.sqlite3*
+.tracking-health.json

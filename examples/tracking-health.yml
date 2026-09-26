@@ -1,0 +1,37 @@
+# Copy to .github/workflows/tracking-health.yml in a private repo that holds
+# your tracking.yaml. Add the secrets under Settings > Secrets and variables > Actions.
+name: Tracking health
+on:
+  schedule:
+    - cron: "17 * * * *"      # hourly: server-side queue + Meta pixel
+    - cron: "43 7 * * *"      # daily: also a real-browser browse test
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "tracking-agent[browser] @ git+https://github.com/OmarYoussef77/omar"
+      - if: github.event.schedule == '43 7 * * *'
+        run: python -m playwright install --with-deps chromium
+      # Restore alert-throttling state so an ongoing problem doesn't alert every hour.
+      - uses: actions/cache@v4
+        with:
+          path: .tracking-health.json
+          key: tracking-health-${{ github.run_id }}
+          restore-keys: tracking-health-
+      - name: Run health checks
+        env:
+          HEALTH_REPORT_TOKEN: ${{ secrets.HEALTH_REPORT_TOKEN }}
+          HEALTH_ALERT_WEBHOOK_URL: ${{ secrets.HEALTH_ALERT_WEBHOOK_URL }}
+          META_CAPI_ACCESS_TOKEN: ${{ secrets.META_CAPI_ACCESS_TOKEN }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          SYNTHETIC=""
+          if [ "${{ github.event.schedule }}" = "43 7 * * *" ]; then SYNTHETIC="--synthetic"; fi
+          tracking-agent --config tracking.yaml health --alert $SYNTHETIC || [ $? -eq 1 ]   # warn (1) doesn't fail the job

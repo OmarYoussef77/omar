@@ -88,6 +88,8 @@ def build_checklist(config: dict[str, Any], audit_warnings: list[str] | None = N
         "",
         "## 4. QA each platform",
         "",
+        "- [ ] Run `tracking-agent test-checkout` (browse mode, no order) and fix every problem it reports. "
+        "Then, with payments in test mode, `tracking-agent test-checkout --purchase`.",
     ]
     for platform in platforms:
         name, qa = _PLATFORM_QA[platform]
@@ -150,5 +152,8 @@ def _capi_steps(config: dict[str, Any]) -> list[str]:
         f"{'SENT (send_without_consent_signal is on)' if capi.get('send_without_consent_signal') else 'skipped'}. "
         "Visitors who decline marketing consent are never sent.",
         "- [ ] Check `GET /healthz` for sent / skipped / failed counts per platform.",
+        "- [ ] Monitoring: set HEALTH_REPORT_TOKEN and HEALTH_ALERT_WEBHOOK_URL (Slack/Discord) on the server "
+        "(it then checks its queue hourly), and schedule `tracking-agent health --alert` "
+        "(see examples/tracking-health.yml).",
     ]
     return lines

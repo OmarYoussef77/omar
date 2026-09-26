@@ -133,6 +133,42 @@ class Store:
             result.setdefault(row["platform"], {})[row["status"]] = row["n"]
         return result
 
+    def report(self, window_hours: float = 24, overdue_minutes: float = 15, order_id: str | None = None) -> dict[str, Any]:
+        """Queue health for the last `window_hours` (read by the health checks)."""
+        now = time.time()
+        since = now - window_hours * 3600
+        platforms: dict[str, dict[str, int]] = {}
+        for row in self._exec(
+            "SELECT platform, status, COUNT(*) AS n FROM jobs WHERE updated_at >= ? GROUP BY platform, status", (since,)
+        ):
+            platforms.setdefault(row["platform"], {})[row["status"]] = row["n"]
+        overdue = self._exec(
+            "SELECT platform, COUNT(*) AS n FROM jobs WHERE status IN ('pending', 'sending') AND due_at < ? GROUP BY platform",
+            (now - overdue_minutes * 60,),
+        ).fetchall()
+        problems = self._exec(
+            "SELECT order_id, platform, status, detail, updated_at FROM jobs "
+            "WHERE status IN ('failed', 'skipped') AND updated_at >= ? ORDER BY updated_at DESC LIMIT 50",
+            (since,),
+        ).fetchall()
+        last_order = self._exec("SELECT MAX(received_at) AS t FROM orders").fetchone()["t"]
+        orders = self._exec("SELECT COUNT(*) AS n FROM orders WHERE received_at >= ?", (since,)).fetchone()["n"]
+        result: dict[str, Any] = {
+            "generated_at": now,
+            "window_hours": window_hours,
+            "orders_received": orders,
+            "last_order_at": last_order,
+            "platforms": platforms,
+            "overdue": {row["platform"]: row["n"] for row in overdue},
+            "recent_problems": [dict(row) for row in problems],
+        }
+        if order_id:
+            result["order"] = {
+                row["platform"]: {"status": row["status"], "detail": row["detail"], "attempts": row["attempts"]}
+                for row in self._exec("SELECT * FROM jobs WHERE order_id = ?", (order_id,))
+            }
+        return result
+
     def purge(self, older_than_days: float = 7) -> None:
         """Delete customer data once it's no longer needed for sending."""
         cutoff = time.time() - older_than_days * 86400

@@ -301,6 +301,46 @@ def make_tools(session: Session) -> list:
             return "User declined. No webhook created."
         return _json({"created": admin.create_webhook(uri)})
 
+    @beta_tool
+    def run_test_checkout(purchase: bool) -> str:
+        """Drive a real headless Chrome through the store (home, product, add to cart, checkout) and
+        report which tracking events each platform received, missing events, duplicate purchases
+        and unexpected pixels.
+
+        Args:
+            purchase: false = stop at checkout (no order; safe to repeat). true = also pay with
+                Shopify's Bogus Gateway (store payments must be in test mode) and confirm the
+                server-side events went out. Asks the user to approve first.
+        """
+        from .capi.platforms import load_secrets
+        from .checkout_test.runner import run_checkout_test
+        from .health import verify_order_server_side
+
+        config = session.config()
+        if purchase and not session.approve(
+            "Place a TEST ORDER with Shopify's Bogus Gateway (payments must be in test mode). "
+            "Browser pixels will send real events to the ad platforms."
+        ):
+            return "User declined. No test order placed."
+        report = run_checkout_test(config, purchase=purchase)
+        if purchase and report.get("order_id"):
+            report["server_side"] = verify_order_server_side(config, load_secrets(), report["order_id"])
+        report.pop("hits", None)
+        return _json(report)
+
+    @beta_tool
+    def run_health_check(synthetic: bool) -> str:
+        """Check tracking health: server-side send failures, stuck jobs, missing webhook deliveries,
+        Meta pixel freshness, and optionally a browse-mode browser test.
+
+        Args:
+            synthetic: also run the browse-mode browser test (takes about a minute).
+        """
+        from .capi.platforms import load_secrets
+        from .health import run_health
+
+        return _json(run_health(session.config(), load_secrets(), synthetic=synthetic))
+
     return [
         get_config,
         set_config,
@@ -312,4 +352,6 @@ def make_tools(session: Session) -> list:
         publish_gtm_version,
         capi_status,
         register_order_webhook,
+        run_test_checkout,
+        run_health_check,
     ]

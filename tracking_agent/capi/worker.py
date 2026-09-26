@@ -15,6 +15,7 @@ log = logging.getLogger("tracking_agent.capi")
 
 MAX_ATTEMPTS = 6
 PURGE_INTERVAL = 3600
+HEALTH_INTERVAL = 3600
 
 
 def process_due(store: Store, dispatcher: Dispatcher, config: dict[str, Any], now: float | None = None) -> int:
@@ -73,15 +74,36 @@ class Worker(threading.Thread):
 
     def run(self) -> None:
         last_purge = 0.0
+        last_health = time.time()  # first check after an hour of data
         while not self._halt.is_set():
             try:
                 process_due(self.store, self.dispatcher, self.config)
                 if time.time() - last_purge > PURGE_INTERVAL:
                     self.store.purge()
                     last_purge = time.time()
+                if time.time() - last_health > HEALTH_INTERVAL:
+                    self.health_check()
+                    last_health = time.time()
             except Exception:
                 log.exception("worker loop error")
             self._halt.wait(self.interval)
+
+    def health_check(self) -> None:
+        """Hourly queue health; alerts only when HEALTH_ALERT_WEBHOOK_URL is set."""
+        from ..health import AlertThrottle, alert_if_needed, run_health
+
+        webhook = self.dispatcher.secrets.get("health_alert_webhook_url", "")
+        if not webhook:
+            return
+        if not hasattr(self, "_throttle"):
+            self._throttle = AlertThrottle(None, float((self.config.get("health") or {}).get("alert_every_hours", 6)))
+        overdue = float((self.config.get("health") or {}).get("max_minutes_overdue", 15))
+        result = run_health(
+            self.config,
+            self.dispatcher.secrets,
+            report_fetcher=lambda: self.store.report(overdue_minutes=overdue),
+        )
+        alert_if_needed(result, webhook, self._throttle, self.config["store"].get("name", ""))
 
     def stop(self) -> None:
         self._halt.set()

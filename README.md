@@ -63,6 +63,8 @@ cp tracking.example.yaml tracking.yaml   # fill in your IDs
 tracking-agent generate                  # -> build/gtm-container.json, shopify-custom-pixel.js, SETUP.md
 tracking-agent audit https://mystore.com # what's already installed + conflicts
 tracking-agent capi-server               # server-side conversions (see below)
+tracking-agent test-checkout             # real-browser tracking test (see below)
+tracking-agent health --alert            # health checks, for cron (see below)
 ```
 
 Options: `--config tracking.yaml` and `--out build`. To use a different model, set `TRACKING_AGENT_MODEL` (the default is `claude-opus-5`, with server-side refusal fallback turned on).
@@ -108,6 +110,51 @@ Run it behind HTTPS at `capi.server_url`, as **one process** (the send queue run
 
 **Test before going live.** Set `capi.meta.test_event_code`, `capi.tiktok.test_event_code` and `capi.snapchat.test_mode`, place a test order, and confirm each platform shows the server event deduplicated against the browser one. The request formats follow each platform's public API docs and are covered by tests against fake endpoints. They have not been run against the live APIs, and API versions (`capi.*.api_version`) change over time, so do this test on your own accounts first. Skip any platform whose native Shopify app already sends CAPI.
 
+## Automated test checkout
+
+`tracking-agent test-checkout` drives a real headless Chrome through your store, records every tracking request the browser sends, and checks it against your config:
+
+```
+home ─▶ product ─▶ add to cart ─▶ checkout ─▶ (--purchase) pay with Bogus Gateway ─▶ thank-you
+```
+
+- **Missing events.** For example, `purchase: tiktok 'CompletePayment' did not fire`.
+- **Double counting.** The same purchase event sent twice, e.g. by a leftover theme snippet or a second app.
+- **Unexpected pixels.** A pixel ID that isn't in your config, e.g. an old agency pixel.
+- **Incomplete events.** Events missing value, currency or product IDs, which catalog ads need.
+- **Mismatched event IDs.** A purchase event ID that isn't `purchase-<order id>`, so server-side events can't deduplicate against it.
+- **Server-side check.** In `--purchase` mode, it also asks the CAPI server whether that exact order went out to every platform.
+
+**Browse mode (the default) stops at checkout and creates no order**, so it's safe to repeat. `--purchase` places a real test order through Shopify's **Bogus Gateway**, so switch payments to test mode first (Settings > Payments). With a live gateway, the test card is simply declined. Test purchases do send real browser events to your ad platforms, so run them sparingly and preferably while each platform's test-events view is open.
+
+```bash
+pip install -e '.[browser]'          # Playwright; uses your installed Chromium
+tracking-agent test-checkout         # browse mode
+tracking-agent test-checkout --purchase --headed   # full order, watch it run
+```
+
+Store behind a password page? Set `STORE_PASSWORD`. Shopify checkout markup changes over time and themes differ, so every selector can be overridden in `checkout_test.selectors`. Shopify may also show bot protection to headless browsers. If it does, run with `--headed` or allow-list the test. To use a specific Chrome build, set `TRACKING_AGENT_CHROMIUM=/path/to/chrome`.
+
+## Ongoing health checks
+
+`tracking-agent health` checks the following, prints a summary and exits with `0` ok / `1` warn / `2` fail:
+
+| Check | Catches |
+|---|---|
+| Server-side queue (CAPI server `/health/report`) | Send failure rate per platform (with hints for expired tokens and for Google "conversion not found"), stuck jobs, missing tokens or config |
+| Webhook silence | No paid orders for `health.max_hours_without_orders`. Shopify quietly deletes webhooks after repeated delivery failures |
+| Meta pixel freshness | Graph API `last_fired_time` older than `health.meta_max_hours_since_fired`, or the pixel marked unavailable |
+| `--synthetic` | The full browse-mode test checkout |
+
+Alerts go to `HEALTH_ALERT_WEBHOOK_URL` (a Slack or Discord incoming webhook) with `--alert`. You get an alert when the status changes, and a reminder every `health.alert_every_hours` while a problem lasts. The CAPI server also runs the queue checks **hourly by itself** when that variable is set, so the core monitoring needs no scheduler. For the Meta check and the daily browser test, schedule the command: `examples/tracking-health.yml` is a ready-to-use GitHub Actions workflow, or use cron:
+
+```cron
+17 * * * *  cd /srv/tracking && tracking-agent health --alert
+43 7 * * *  cd /srv/tracking && tracking-agent health --alert --synthetic
+```
+
+`/health/report` needs `HEALTH_REPORT_TOKEN`: set the same value on the server and wherever the check runs.
+
 ## Agent tools
 
 | Tool | What it does | Writes externally? |
@@ -121,6 +168,8 @@ Run it behind HTTPS at `capi.server_url`, as **one process** (the send queue run
 | `publish_gtm_version` | Makes the version live | Yes, **asks first** |
 | `capi_status` | Shows the server-side setup and which token environment variables are set (never their values) | No |
 | `register_order_webhook` | Subscribes the CAPI server to Shopify's `orders/paid` webhook | Yes, **asks first** |
+| `run_test_checkout` | Runs a real browser through the store and reports what each platform received | Browse: no. Purchase: places a test order, **asks first** |
+| `run_health_check` | Runs the health checks above | No |
 
 ## GTM API access (optional)
 
@@ -146,10 +195,9 @@ pip install -e '.[dev]'
 pytest
 ```
 
-The tests run the generated pixel in Node with realistic Shopify events. They also render every GTM Custom HTML tag the way GTM does and check the exact `fbq` / `ttq` / `snaptr` / `lintrk` calls it makes. Other tests cover the GTM API push (against a fake service) and the agent loop (against a fake Messages API).
+The browser tests drive real Chromium through a local mock Shopify store (pages send each platform's wire format, answered offline). The tests also run the generated pixel in Node with realistic Shopify events. They also render every GTM Custom HTML tag the way GTM does and check the exact `fbq` / `ttq` / `snaptr` / `lintrk` calls it makes. Other tests cover the GTM API push (against a fake service) and the agent loop (against a fake Messages API).
 
 ## Roadmap
 
 - Refund and cancellation events sent server-side.
 - More platforms: Pinterest, Reddit, X, Microsoft UET.
-- A headless-browser checker that places a test order and confirms each platform received the events.

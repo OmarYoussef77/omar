@@ -4,6 +4,8 @@
   tracking-agent generate   # build files from the config, no LLM involved
   tracking-agent audit URL  # scan a storefront for installed tracking
   tracking-agent capi-server [--host H] [--port P]  # server-side conversions
+  tracking-agent test-checkout [--purchase]         # real-browser tracking test
+  tracking-agent health [--synthetic] [--alert]     # health checks (for cron)
 """
 
 from __future__ import annotations
@@ -101,6 +103,49 @@ def _capi_server(args: argparse.Namespace) -> None:
     serve(args.config, host=args.host, port=args.port)
 
 
+def _test_checkout(args: argparse.Namespace) -> None:
+    from .capi.platforms import load_secrets
+    from .checkout_test.runner import run_checkout_test
+    from .health import verify_order_server_side
+
+    config = cfg.load_config(args.config)
+    if args.purchase and not args.yes and not _approve(
+        f"Place a TEST ORDER on {config['checkout_test'].get('store_url') or config['store'].get('domain')} "
+        "using Shopify's Bogus Gateway (payments must be in test mode).\n"
+        "Browser pixels will send real events to your ad platforms."
+    ):
+        sys.exit("Cancelled.")
+    report = run_checkout_test(config, purchase=args.purchase, headless=not args.headed)
+    if args.purchase and report.get("order_id"):
+        report["server_side"] = verify_order_server_side(config, load_secrets(), report["order_id"])
+        if report["server_side"].get("status") == "fail":
+            report["status"] = "fail"
+    if not args.show_hits:
+        report.pop("hits", None)
+    print(json.dumps(report, indent=2))
+    sys.exit({"pass": 0, "warn": 0}.get(report["status"], 1))
+
+
+def _health(args: argparse.Namespace) -> None:
+    from .capi.platforms import load_secrets
+    from .health import AlertThrottle, alert_if_needed, run_health, summarize
+
+    config = cfg.load_config(args.config)
+    secrets = load_secrets()
+    result = run_health(config, secrets, synthetic=args.synthetic)
+    print(summarize(result, config["store"].get("name", "")))
+    if args.json:
+        print(json.dumps(result, indent=2))
+    if args.alert:
+        webhook = secrets.get("health_alert_webhook_url", "")
+        if not webhook:
+            sys.exit("--alert needs HEALTH_ALERT_WEBHOOK_URL")
+        throttle = AlertThrottle(Path(args.state_file), float(config["health"].get("alert_every_hours", 6)))
+        if alert_if_needed(result, webhook, throttle, config["store"].get("name", "")):
+            print("Alert sent.")
+    sys.exit({"ok": 0, "warn": 1, "fail": 2}[result["status"]])
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="tracking-agent", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default="tracking.yaml", help="config file (default: tracking.yaml)")
@@ -113,9 +158,25 @@ def main(argv: list[str] | None = None) -> None:
     server_parser = sub.add_parser("capi-server", help="run the server-side conversions server")
     server_parser.add_argument("--host", default="0.0.0.0")
     server_parser.add_argument("--port", type=int, default=8080)
+    test_parser = sub.add_parser("test-checkout", help="drive a real browser through the store and verify tracking")
+    test_parser.add_argument("--purchase", action="store_true", help="place a test order (Bogus Gateway)")
+    test_parser.add_argument("--yes", action="store_true", help="don't ask before placing the test order")
+    test_parser.add_argument("--headed", action="store_true", help="show the browser window")
+    test_parser.add_argument("--show-hits", action="store_true", help="include every captured request")
+    health_parser = sub.add_parser("health", help="run health checks (exit 0 ok / 1 warn / 2 fail)")
+    health_parser.add_argument("--synthetic", action="store_true", help="also run a browse-mode browser test")
+    health_parser.add_argument("--alert", action="store_true", help="post to HEALTH_ALERT_WEBHOOK_URL on problems")
+    health_parser.add_argument("--state-file", default=".tracking-health.json", help="alert throttling state")
+    health_parser.add_argument("--json", action="store_true", help="also print the full result as JSON")
     args = parser.parse_args(argv)
 
-    commands = {"generate": _generate, "audit": _audit, "capi-server": _capi_server}
+    commands = {
+        "generate": _generate,
+        "audit": _audit,
+        "capi-server": _capi_server,
+        "test-checkout": _test_checkout,
+        "health": _health,
+    }
     commands.get(args.command, _chat)(args)
 
 

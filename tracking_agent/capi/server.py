@@ -74,6 +74,8 @@ class CapiApp:
                 return self._collect(environ, start_response)
             if path == "/collect" and method == "OPTIONS":
                 return self._respond(start_response, "204 No Content", b"", cors=True)
+            if path == "/health/report" and method == "GET":
+                return self._health_report(environ, start_response)
             if path == "/healthz" and method == "GET":
                 body = json.dumps({"ok": True, "jobs": self.store.stats()}).encode()
                 return self._respond(start_response, "200 OK", body, content_type="application/json")
@@ -122,6 +124,22 @@ class CapiApp:
         data["ip"] = self._client_ip(environ)
         self.store.add_beacon(order_id, str(raw.get("checkout_token") or "") or None, data)
         return self._respond(start_response, "204 No Content", b"", cors=True)
+
+    def _health_report(self, environ: dict[str, Any], start_response: StartResponse) -> Iterable[bytes]:
+        token = self.secrets.get("health_report_token", "")
+        supplied = environ.get("HTTP_AUTHORIZATION", "").removeprefix("Bearer ").strip()
+        if not token or not hmac.compare_digest(supplied, token):
+            return self._respond(start_response, "401 Unauthorized", b"set HEALTH_REPORT_TOKEN and send it as a Bearer token")
+        from urllib.parse import parse_qs
+
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        health = self.config.get("health") or {}
+        report = self.store.report(
+            window_hours=float(query.get("hours", ["24"])[0]),
+            overdue_minutes=float(health.get("max_minutes_overdue", 15)),
+            order_id=order_number(query.get("order_id", [""])[0]) or None,
+        )
+        return self._respond(start_response, "200 OK", json.dumps(report).encode(), content_type="application/json")
 
     # -- helpers -------------------------------------------------------------
     @staticmethod

@@ -91,6 +91,33 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "delay_seconds": 3600,
         },
     },
+    # Automated test checkout (tracking-agent test-checkout).
+    "checkout_test": {
+        "store_url": "",  # defaults to https://<store.domain>
+        "product_url": "",  # defaults to the first product in /products.json
+        "store_password_env": "STORE_PASSWORD",
+        "email": "tracking-test@example.com",
+        "address": {
+            "first_name": "Tracking",
+            "last_name": "Test",
+            "address1": "1 Test Street",
+            "city": "New York",
+            "zone": "NY",
+            "postal_code": "10001",
+            "phone": "",
+        },
+        "headless": True,
+        "selectors": {},  # override any runner.DEFAULT_SELECTORS entry
+    },
+    # Ongoing health checks (tracking-agent health). The alert webhook URL is
+    # a secret: set HEALTH_ALERT_WEBHOOK_URL in the environment.
+    "health": {
+        "max_failure_rate": 0.05,
+        "max_hours_without_orders": 24,
+        "max_minutes_overdue": 15,
+        "meta_max_hours_since_fired": 6,
+        "alert_every_hours": 6,
+    },
 }
 
 CAPI_PLATFORMS = ("meta", "tiktok", "snapchat", "linkedin", "google_ads")
