@@ -15,8 +15,21 @@ from typing import Any
 
 from .config import enabled_platforms
 
-# Identify honestly as a script rather than impersonating a browser.
-USER_AGENT = "tracking-agent/0.1 (+https://github.com/OmarYoussef77/omar; storefront tracking audit)"
+# Present as desktop Chrome so storefronts serve the same HTML (and the same
+# tags) that real shoppers get.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+)
+BROWSER_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Ch-Ua": '"Chromium";v="140", "Google Chrome";v="140", "Not;A=Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Upgrade-Insecure-Requests": "1",
+}
 
 # platform -> list of (description, regex with one capture group for the ID)
 DETECTORS: dict[str, list[tuple[str, str]]] = {
@@ -51,7 +64,7 @@ SHOPIFY_MARKERS = {
 def fetch(url: str, timeout: float = 20.0) -> str:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
+    request = urllib.request.Request(url, headers=BROWSER_HEADERS)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read().decode("utf-8", errors="replace")

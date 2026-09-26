@@ -55,14 +55,14 @@ def _serve(status, body=b"<html>GTM-ABC1234</html>"):
     return server, seen
 
 
-def test_audit_identifies_itself_honestly():
+def test_audit_presents_as_chrome():
     server, seen = _serve(200)
     try:
         result = audit.audit_url(f"http://127.0.0.1:{server.server_port}/")
     finally:
         server.shutdown()
-    assert seen["user_agent"].startswith("tracking-agent/")
-    assert "Mozilla" not in seen["user_agent"]
+    assert "Chrome/" in seen["user_agent"]
+    assert "tracking-agent" not in seen["user_agent"]
     assert result["installed"]["gtm"][0]["id"] == "GTM-ABC1234"
 
 
