@@ -6,3 +6,4 @@ build/
 tracking.yaml
 *service-account*.json
 .env
+*.egg-info/
