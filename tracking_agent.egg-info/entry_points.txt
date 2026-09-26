@@ -1,0 +1,2 @@
+[console_scripts]
+tracking-agent = tracking_agent.cli:main

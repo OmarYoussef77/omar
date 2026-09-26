@@ -1,0 +1,41 @@
+# Copy to tracking.yaml (git-ignored) and fill in, or let the agent fill it in for you.
+store:
+  name: Example Store
+  domain: example-store.com
+  currency: USD
+  # How product IDs appear in your catalogs/feeds:
+  #   variant_id | product_id | sku | shopify_feed (shopify_US_<product>_<variant>)
+  item_id_source: shopify_feed
+  feed_country: US
+
+gtm:
+  container_public_id: GTM-ABC1234
+  # Only needed for pushing via the GTM API (numbers from the GTM URL):
+  account_id: ""
+  container_id: ""
+  credentials_file: ""   # service-account JSON; empty = Application Default Credentials
+
+platforms:
+  ga4:
+    enabled: true
+    measurement_id: G-ABC123DEF4
+  google_ads:
+    enabled: true
+    conversion_id: AW-123456789
+    conversions:          # event -> conversion label (Google Ads > Goals > Conversions > Tag setup)
+      purchase: AbCdEfGhIjKlMnOp
+      add_to_cart: QrStUvWxYz123456
+  meta:
+    enabled: true
+    pixel_id: "1234567890123456"
+  tiktok:
+    enabled: true
+    pixel_id: C4ABCDEFGHIJKLMNOPQR
+  snapchat:
+    enabled: true
+    pixel_id: 0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b
+  linkedin:
+    enabled: true
+    partner_id: "1234567"
+    conversions:          # event -> conversion ID (Campaign Manager > Conversions)
+      purchase: 12345678
