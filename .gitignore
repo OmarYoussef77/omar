@@ -7,3 +7,4 @@ tracking.yaml
 *service-account*.json
 .env
 *.egg-info/
+capi.sqlite3*

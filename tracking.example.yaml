@@ -39,3 +39,25 @@ platforms:
     partner_id: "1234567"
     conversions:          # event -> conversion ID (Campaign Manager > Conversions)
       purchase: 12345678
+
+shopify:
+  myshopify_domain: example-store.myshopify.com   # for registering the order webhook
+  api_version: "2026-07"
+
+# Server-side conversions (optional). Tokens are environment variables - see README.
+capi:
+  enabled: false
+  server_url: https://capi.example-store.com
+  wait_seconds: 60
+  send_without_consent_signal: false   # only true where you have a legal basis
+  database: capi.sqlite3
+  meta: {api_version: v23.0, test_event_code: ""}
+  tiktok: {test_event_code: ""}
+  snapchat: {test_mode: false}
+  linkedin: {api_version: "202509"}
+  google_ads:
+    customer_id: ""            # 123-456-7890
+    login_customer_id: ""      # manager account, if any
+    conversion_action_id: ""   # the purchase conversion action (Enhanced conversions on)
+    api_version: v22
+    delay_seconds: 3600

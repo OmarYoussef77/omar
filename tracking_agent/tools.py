@@ -257,6 +257,50 @@ def make_tools(session: Session) -> list:
             return "User declined. Nothing was published."
         return _json(session.gtm().publish_version(session.version_path))
 
+    @beta_tool
+    def capi_status() -> str:
+        """Show the server-side conversions (CAPI) setup: config, which platforms will be sent
+        server-side, and which access tokens are present in the environment (values are never shown)."""
+        from .capi.platforms import SECRET_ENV, load_secrets
+        from .capi.server import capi_platforms
+
+        config = session.config()
+        secrets = load_secrets()
+        return _json(
+            {
+                "capi": config["capi"],
+                "server_side_platforms": capi_platforms(config),
+                "env_vars_present": {var: bool(secrets[key]) for key, var in SECRET_ENV.items()},
+                "validation": cfg.validate_config(config),
+                "how_to_run": "tracking-agent capi-server --port 8080  (behind HTTPS at capi.server_url)",
+            }
+        )
+
+    @beta_tool
+    def register_order_webhook() -> str:
+        """Subscribe the CAPI server to Shopify's orders/paid webhook (capi.server_url +
+        /webhooks/shopify/orders-paid). Asks the user to approve first. Needs
+        shopify.myshopify_domain in the config and SHOPIFY_ADMIN_TOKEN in the environment."""
+        import os
+
+        from .capi.shopify_admin import ShopifyAdmin, webhook_uri
+
+        config = session.config()
+        if not config["capi"].get("server_url"):
+            return "Set capi.server_url (the public https URL of the CAPI server) first."
+        uri = webhook_uri(config["capi"]["server_url"])
+        admin = ShopifyAdmin(
+            config["shopify"].get("myshopify_domain", ""),
+            os.environ.get("SHOPIFY_ADMIN_TOKEN", ""),
+            config["shopify"].get("api_version", "2026-07"),
+        )
+        existing = admin.existing_webhook(uri)
+        if existing:
+            return _json({"already_registered": existing, "uri": uri})
+        if not session.approve(f"Create Shopify webhook ORDERS_PAID -> {uri}"):
+            return "User declined. No webhook created."
+        return _json({"created": admin.create_webhook(uri)})
+
     return [
         get_config,
         set_config,
@@ -266,4 +310,6 @@ def make_tools(session: Session) -> list:
         push_to_gtm,
         create_gtm_version,
         publish_gtm_version,
+        capi_status,
+        register_order_webhook,
     ]

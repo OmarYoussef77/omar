@@ -62,7 +62,7 @@ SHOPIFY_EVENTS = [
         },
     ),
     ("search_submitted", {"id": "evt-search", "context": CONTEXT, "data": {"searchResult": {"query": "tee"}}}),
-    ("checkout_completed", {"id": "evt-purchase", "context": CONTEXT, "data": {"checkout": CHECKOUT}}),
+    ("checkout_completed", {"id": "purchase-9001", "context": CONTEXT, "data": {"checkout": CHECKOUT}}),
 ]
 
 PIXEL_HARNESS = r"""
@@ -75,17 +75,26 @@ const document = {
   getElementsByTagName: () => [{ parentNode: { insertBefore: (el) => loaded.push(el.src) } }],
 };
 const window = {};
+const beacons = [];
+const cookies = { _fbp: 'fb.1.111.222', _ttp: 'ttp-abc', _scid: 'scid-xyz' };
 const sandbox = {
-  window, document, console,
+  window, document, console, Promise,
   analytics: { subscribe: (name, fn) => { handlers[name] = fn; } },
   init: { customerPrivacy: { marketingAllowed: false, analyticsProcessingAllowed: true, preferencesProcessingAllowed: false } },
   customerPrivacy: { subscribe: (name, fn) => { handlers['privacy:' + name] = fn; } },
+  browser: { cookie: { get: async (name) => cookies[name] || '' } },
+  fetch: async (url, options) => { beacons.push({ url, options }); return {}; },
 };
 vm.runInNewContext(input.code, sandbox);
+if (input.consent_first) {
+  handlers['privacy:visitorConsentCollected']({ customerPrivacy: { marketingAllowed: true, analyticsProcessingAllowed: true, preferencesProcessingAllowed: true } });
+}
 for (const [name, event] of input.events) handlers[name](event);
 handlers['privacy:visitorConsentCollected']({ customerPrivacy: { marketingAllowed: true, analyticsProcessingAllowed: true, preferencesProcessingAllowed: true } });
-const dataLayer = window.dataLayer.map((e) => (typeof e === 'object' && e.length !== undefined && !Array.isArray(e) ? Array.from(e) : e));
-console.log(JSON.stringify({ dataLayer, loaded, subscribed: Object.keys(handlers) }));
+setTimeout(() => {
+  const dataLayer = window.dataLayer.map((e) => (typeof e === 'object' && e.length !== undefined && !Array.isArray(e) ? Array.from(e) : e));
+  console.log(JSON.stringify({ dataLayer, loaded, subscribed: Object.keys(handlers), beacons }));
+}, 20);
 """
 
 TAG_HARNESS = r"""
@@ -119,9 +128,9 @@ def _node(harness: str, payload: dict) -> dict:
     return json.loads(result.stdout)
 
 
-def _run_pixel(config):
+def _run_pixel(config, events=None, consent_first=False):
     code = shopify_pixel.build_pixel(config)
-    return _node(PIXEL_HARNESS, {"code": code, "events": SHOPIFY_EVENTS})
+    return _node(PIXEL_HARNESS, {"code": code, "events": events or SHOPIFY_EVENTS, "consent_first": consent_first})
 
 
 def _events(output):
@@ -147,7 +156,7 @@ def test_pixel_consent_mode(config):
 def test_pixel_purchase_event(config):
     events = _events(_run_pixel(config))
     purchase = events["purchase"]
-    assert purchase["event_id"] == "evt-purchase"
+    assert purchase["event_id"] == "purchase-9001"
     assert purchase["page_location"].endswith("/thank-you")
     assert purchase["ecommerce"]["transaction_id"] == "9001"
     assert purchase["ecommerce"]["value"] == 55.0
@@ -232,7 +241,7 @@ def test_meta_purchase_tag(config):
     assert track[2]["value"] == 55.0 and track[2]["currency"] == "USD"
     assert track[2]["content_ids"] == ["shopify_US_111_4444"]
     assert track[2]["contents"] == [{"id": "shopify_US_111_4444", "quantity": 2, "item_price": 25.0}]
-    assert track[3] == {"eventID": "evt-purchase"}
+    assert track[3] == {"eventID": "purchase-9001"}
     assert "https://connect.facebook.net/en_US/fbevents.js" in out["loaded"]
 
 
@@ -244,7 +253,7 @@ def test_tiktok_purchase_tag(config):
     assert (method, name) == ("track", "CompletePayment")
     assert payload["value"] == 55.0
     assert payload["contents"][0]["content_id"] == "shopify_US_111_4444"
-    assert options == {"event_id": "evt-purchase"}
+    assert options == {"event_id": "purchase-9001"}
     assert any("analytics.tiktok.com" in src for src in out["loaded"])
 
 
@@ -255,16 +264,57 @@ def test_snap_purchase_tag(config):
     assert init[2]["user_email"] == "buyer@example.com"
     assert track[:2] == ["track", "PURCHASE"]
     assert track[2]["transaction_id"] == "9001"
-    assert track[2]["client_dedup_id"] == "evt-purchase"
+    assert track[2]["client_dedup_id"] == "purchase-9001"
     assert track[2]["item_ids"] == ["shopify_US_111_4444"]
 
 
 def test_linkedin_conversion_tag(config):
     out = _fire(config, ["LinkedIn - Insight Tag", "LinkedIn - Conversion - purchase"], "purchase")
-    assert out["calls"]["lintrk"] == [["track", {"conversion_id": 12345678, "event_id": "evt-purchase"}]]
+    assert out["calls"]["lintrk"] == [["track", {"conversion_id": 12345678, "event_id": "purchase-9001"}]]
     assert "https://snap.licdn.com/li.lms-analytics/insight.min.js" in out["loaded"]
 
 
 def test_search_tags(config):
     out = _fire(config, ["Meta - Base (init)", "Meta - Search"], "search")
     assert out["calls"]["fbq"][-1][2] == {"search_string": "tee"}
+
+
+# --- server-side hand-off --------------------------------------------------
+
+
+def _capi_config(config):
+    config["capi"]["enabled"] = True
+    config["capi"]["server_url"] = "https://capi.example.com/"
+    return config
+
+
+def test_purchase_event_id_handles_shopify_gid(config):
+    checkout = {**CHECKOUT, "order": {"id": "gid://shopify/OrderIdentity/9001"}}
+    events = [("checkout_completed", {"id": "evt-x", "context": CONTEXT, "data": {"checkout": checkout}})]
+    purchase = _events(_run_pixel(config, events))["purchase"]
+    assert purchase["event_id"] == "purchase-9001"
+    assert purchase["ecommerce"]["transaction_id"] == "9001"
+
+
+def test_no_beacon_without_capi(config):
+    assert _run_pixel(config)["beacons"] == []
+
+
+def test_beacon_with_consent_carries_cookies(config):
+    out = _run_pixel(_capi_config(config), consent_first=True)
+    (beacon,) = out["beacons"]
+    assert beacon["url"] == "https://capi.example.com/collect"
+    assert beacon["options"]["headers"]["Content-Type"] == "text/plain"
+    assert beacon["options"]["keepalive"] is True
+    body = json.loads(beacon["options"]["body"])
+    assert body["order_id"] == "9001"
+    assert body["checkout_token"] == "tok"
+    assert body["marketing_allowed"] is True
+    assert body["cookies"] == {"_fbp": "fb.1.111.222", "_ttp": "ttp-abc", "_scid": "scid-xyz"}
+    assert body["page_url"].endswith("/thank-you")
+
+
+def test_beacon_without_consent_has_no_identifiers(config):
+    (beacon,) = _run_pixel(_capi_config(config))["beacons"]
+    body = json.loads(beacon["options"]["body"])
+    assert body == {"order_id": "9001", "checkout_token": "tok", "marketing_allowed": False}

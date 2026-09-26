@@ -62,9 +62,51 @@ Other commands (no LLM needed):
 cp tracking.example.yaml tracking.yaml   # fill in your IDs
 tracking-agent generate                  # -> build/gtm-container.json, shopify-custom-pixel.js, SETUP.md
 tracking-agent audit https://mystore.com # what's already installed + conflicts
+tracking-agent capi-server               # server-side conversions (see below)
 ```
 
 Options: `--config tracking.yaml` and `--out build`. To use a different model, set `TRACKING_AGENT_MODEL` (the default is `claude-opus-5`, with server-side refusal fallback turned on).
+
+## Server-side conversions (CAPI)
+
+Browser pixels miss buyers who use ad blockers or Safari/iOS tracking protection. With `capi.enabled`, a small server you host picks up those purchases:
+
+```
+Thank-you page ── pixel beacon (cookies + consent) ──▶ POST /collect ─┐
+Shopify ── orders/paid webhook (HMAC-signed) ───────▶ POST /webhooks/…─┤
+                                                                       ▼
+                     queue (SQLite, one job per order × platform, retries)
+                                                                       ▼
+       Meta CAPI · TikTok Events API · Snap CAPI v3 · LinkedIn CAPI · Google Ads enhanced conversions
+```
+
+- **No double counting.** The pixel's purchase event and the server's event share the ID `purchase-<order id>`, so each platform keeps one copy. Google Ads enhancements reference the same `orderId` as the browser conversion tag. A test checks that the browser and server IDs match.
+- **Better matching.** Email, phone, name and address are normalized and SHA-256 hashed. The server also sends the IP address, user agent, click IDs from the landing URL (`fbclid`, `ttclid`, `ScCid`, `li_fat_id`) and first-party cookies (`_fbp`, `_fbc`, `_ttp`, `_scid`).
+- **Consent.** Visitors who decline marketing consent are never sent. Orders with no consent signal from the browser are skipped unless you set `capi.send_without_consent_signal: true`.
+- **Reliability.** Duplicate webhook deliveries are ignored. Each platform retries on its own with increasing waits on 429 and 5xx errors. TikTok's error-inside-a-200 responses and Google's partial failures count as failures. `GET /healthz` shows sent, skipped and failed counts. Customer data is deleted after 7 days.
+- **Security.** Webhooks must pass Shopify's HMAC signature check. A beacon only counts if its checkout token matches the order's, so nobody can attach cookies to someone else's order.
+
+Setup (the agent walks you through it, and `SETUP.md` lists every step):
+
+| Environment variable | Where to get it |
+|---|---|
+| `SHOPIFY_WEBHOOK_SECRET`, `SHOPIFY_ADMIN_TOKEN` | Shopify admin > Apps > Develop apps: a custom app with `read_orders` **and protected customer data access** (name, email, phone, address). Without that access, Shopify blanks those fields. |
+| `META_CAPI_ACCESS_TOKEN` | Events Manager > dataset > Settings > Conversions API |
+| `TIKTOK_EVENTS_ACCESS_TOKEN` | TikTok Events Manager > pixel > Settings |
+| `SNAP_CAPI_ACCESS_TOKEN` | Snap Events Manager > pixel > Conversions API |
+| `LINKEDIN_CAPI_ACCESS_TOKEN` | LinkedIn developer app with the Conversions API product |
+| `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN` | Google Ads API access, with Enhanced conversions turned on for the purchase conversion action |
+
+```bash
+tracking-agent capi-server --port 8080         # local
+docker build -t tracking-agent . && docker run -p 8080:8080 \
+  -v $PWD/tracking.yaml:/app/tracking.yaml -v capi-data:/data \
+  -e SHOPIFY_WEBHOOK_SECRET=... -e META_CAPI_ACCESS_TOKEN=... tracking-agent
+```
+
+Run it behind HTTPS at `capi.server_url`, as **one process** (the send queue runs inside it). Then register the webhook with the agent's `register_order_webhook` tool and re-paste the regenerated pixel.
+
+**Test before going live.** Set `capi.meta.test_event_code`, `capi.tiktok.test_event_code` and `capi.snapchat.test_mode`, place a test order, and confirm each platform shows the server event deduplicated against the browser one. The request formats follow each platform's public API docs and are covered by tests against fake endpoints. They have not been run against the live APIs, and API versions (`capi.*.api_version`) change over time, so do this test on your own accounts first. Skip any platform whose native Shopify app already sends CAPI.
 
 ## Agent tools
 
@@ -77,6 +119,8 @@ Options: `--config tracking.yaml` and `--out build`. To use a different model, s
 | `push_to_gtm` | Adds or updates tags, triggers and variables in a GTM **workspace** (a draft) | Yes, **asks first** |
 | `create_gtm_version` | Saves the workspace as a new version (not live yet) | Yes, **asks first** |
 | `publish_gtm_version` | Makes the version live | Yes, **asks first** |
+| `capi_status` | Shows the server-side setup and which token environment variables are set (never their values) | No |
+| `register_order_webhook` | Subscribes the CAPI server to Shopify's `orders/paid` webhook | Yes, **asks first** |
 
 ## GTM API access (optional)
 
@@ -106,6 +150,6 @@ The tests run the generated pixel in Node with realistic Shopify events. They al
 
 ## Roadmap
 
-- Server-side Conversions API relay (Shopify `orders/paid` webhook → Meta CAPI / TikTok Events API / Snap CAPI / LinkedIn CAPI / Google Ads enhanced conversions), deduplicated on `event_id`.
+- Refund and cancellation events sent server-side.
 - More platforms: Pinterest, Reddit, X, Microsoft UET.
 - A headless-browser checker that places a test order and confirms each platform received the events.

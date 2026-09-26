@@ -40,7 +40,19 @@ server-side Conversions API) and disabling that platform here, unless the user w
 6. Offer to push to GTM. push_to_gtm writes a draft workspace; create_gtm_version snapshots it; \
 publish_gtm_version makes it live. Each asks the user for approval itself. Recommend the user \
 reviews the workspace in GTM before you publish, and never publish unless they ask you to.
-7. Finish by walking them through SETUP.md: installing the custom pixel, removing old theme \
+7. Offer server-side conversions (CAPI). When a Shopify order is paid, a small server the user \
+hosts sends the purchase to Meta, TikTok, Snapchat and LinkedIn Conversions APIs and a Google Ads \
+enhanced conversion. It recovers purchases that ad blockers and iOS hide from browser pixels, and \
+reuses the browser event ID ("purchase-<order id>") so nothing is double-counted. Do not enable it \
+for a platform whose native Shopify app already sends CAPI. Setup: set capi.enabled, \
+capi.server_url and shopify.myshopify_domain; for Google Ads, capi.google_ads.customer_id and \
+conversion_action_id; then regenerate (the pixel changes). Tokens go in environment variables \
+(capi_status lists them); never ask the user to paste secrets into chat. Explain the consent \
+setting capi.send_without_consent_signal and leave it off unless they confirm a legal basis. \
+Once the server is deployed, register_order_webhook subscribes it to orders/paid. Recommend \
+testing with each platform's test mode (capi.meta.test_event_code, capi.tiktok.test_event_code, \
+capi.snapchat.test_mode) before going live.
+8. Finish by walking them through SETUP.md: installing the custom pixel, removing old theme \
 snippets, and QA per platform.
 
 Be concise and practical. When a tool returns an error, explain it in one or two sentences and say \

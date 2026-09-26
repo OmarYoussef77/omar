@@ -3,6 +3,7 @@
   tracking-agent chat       # talk to the agent (default)
   tracking-agent generate   # build files from the config, no LLM involved
   tracking-agent audit URL  # scan a storefront for installed tracking
+  tracking-agent capi-server [--host H] [--port P]  # server-side conversions
 """
 
 from __future__ import annotations
@@ -94,6 +95,12 @@ def _audit(args: argparse.Namespace) -> None:
     print(json.dumps(audit.audit_url(args.url, config), indent=2))
 
 
+def _capi_server(args: argparse.Namespace) -> None:
+    from .capi.server import serve
+
+    serve(args.config, host=args.host, port=args.port)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="tracking-agent", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default="tracking.yaml", help="config file (default: tracking.yaml)")
@@ -103,9 +110,13 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("generate", help="generate files from the config without the LLM")
     audit_parser = sub.add_parser("audit", help="scan a storefront for installed tracking")
     audit_parser.add_argument("url")
+    server_parser = sub.add_parser("capi-server", help="run the server-side conversions server")
+    server_parser.add_argument("--host", default="0.0.0.0")
+    server_parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args(argv)
 
-    {"generate": _generate, "audit": _audit}.get(args.command, _chat)(args)
+    commands = {"generate": _generate, "audit": _audit, "capi-server": _capi_server}
+    commands.get(args.command, _chat)(args)
 
 
 if __name__ == "__main__":

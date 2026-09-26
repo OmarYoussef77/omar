@@ -44,6 +44,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "item_id_source": "variant_id",
         "feed_country": "US",
     },
+    "shopify": {
+        # Needed to register the order webhook: <shop>.myshopify.com
+        "myshopify_domain": "",
+        "api_version": "2026-07",
+    },
     "gtm": {
         "container_public_id": "",
         "account_id": "",
@@ -58,7 +63,37 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "snapchat": {"enabled": False, "pixel_id": ""},
         "linkedin": {"enabled": False, "partner_id": "", "conversions": {}},
     },
+    # Server-side conversions: Shopify orders/paid webhook -> platform APIs.
+    # Access tokens come from environment variables, never from this file.
+    "capi": {
+        "enabled": False,
+        # Public HTTPS base URL of the CAPI server, e.g. https://capi.example.com
+        "server_url": "",
+        # Seconds to wait for the browser's first-party identifiers (fbp,
+        # ttp, ...) before sending an order without them.
+        "wait_seconds": 60,
+        # Orders with no consent signal from the browser (pixel blocked or
+        # never loaded) are skipped unless this is true. Only enable it where
+        # you have a legal basis to send without consent (e.g. US-only stores).
+        "send_without_consent_signal": False,
+        "database": "capi.sqlite3",
+        "meta": {"api_version": "v23.0", "test_event_code": ""},
+        "tiktok": {"test_event_code": ""},
+        "snapchat": {"test_mode": False},
+        "linkedin": {"api_version": "202509"},
+        "google_ads": {
+            "customer_id": "",
+            "login_customer_id": "",
+            "conversion_action_id": "",
+            "api_version": "v22",
+            # Enhancements must reference a conversion Google has already
+            # recorded from the browser tag, so they are sent later.
+            "delay_seconds": 3600,
+        },
+    },
 }
+
+CAPI_PLATFORMS = ("meta", "tiktok", "snapchat", "linkedin", "google_ads")
 
 _ID_PATTERNS: dict[tuple[str, str], tuple[str, str]] = {
     ("gtm", "container_public_id"): (r"GTM-[A-Z0-9]{4,10}", "GTM-XXXXXXX"),
@@ -163,4 +198,30 @@ def validate_config(config: dict[str, Any]) -> dict[str, list[str]]:
             "platforms.linkedin.conversions is empty - Insight Tag page views will fire, "
             "but add {purchase: <conversion id>} to track purchases"
         )
+    problems += _validate_capi(config, warnings)
     return {"errors": problems, "warnings": warnings}
+
+
+def _validate_capi(config: dict[str, Any], warnings: list[str]) -> list[str]:
+    capi = config["capi"]
+    if not capi.get("enabled"):
+        return []
+    problems: list[str] = []
+    url = str(capi.get("server_url", ""))
+    if not re.fullmatch(r"https://[^\s/]+(/[^\s]*)?", url):
+        problems.append("capi.server_url must be a public https:// URL, e.g. https://capi.example.com")
+    platforms = enabled_platforms(config)
+    if "google_ads" in platforms:
+        ads = capi["google_ads"]
+        if not re.fullmatch(r"\d{10}", str(ads.get("customer_id", "")).replace("-", "")):
+            warnings.append("capi.google_ads.customer_id (10 digits) is not set - Google Ads enhancements will be skipped")
+        elif not re.fullmatch(r"\d+", str(ads.get("conversion_action_id", ""))):
+            warnings.append("capi.google_ads.conversion_action_id is not set - Google Ads enhancements will be skipped")
+    if "linkedin" in platforms and "purchase" not in (config["platforms"]["linkedin"].get("conversions") or {}):
+        warnings.append("LinkedIn server-side needs platforms.linkedin.conversions.purchase")
+    if capi.get("send_without_consent_signal"):
+        warnings.append(
+            "capi.send_without_consent_signal is on: orders are sent even when the browser never "
+            "reported consent. Only use this where you have a legal basis to do so."
+        )
+    return problems
