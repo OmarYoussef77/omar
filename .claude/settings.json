@@ -9,5 +9,8 @@
   },
   "enabledPlugins": {
     "oh-my-claudecode@omc": true
+  },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   }
 }
